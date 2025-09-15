@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+.env
+.venv/
+app.db
+
+# Flask / migrations cache
+instance/
+migrations/**/__pycache__/
+
+# VS Code
+.vscode/
