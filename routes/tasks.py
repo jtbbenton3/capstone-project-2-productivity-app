@@ -14,7 +14,7 @@ from utils.pagination import (
 tasks_bp = Blueprint("tasks", __name__, url_prefix="/tasks")
 
 
-# ---- helpers ---------------------------------------------------------------
+# ---- helpers 
 
 def _parse_iso_date_or_none(value):
     """
@@ -40,7 +40,7 @@ def _task_to_dict(t: Task):
     }
 
 
-# ---- routes ----------------------------------------------------------------
+# ---- routes 
 
 @tasks_bp.get("")
 @login_required
@@ -56,7 +56,7 @@ def list_tasks():
       - sort                      -> e.g. 'due_date', '-priority', 'priority,title'
     Returns {"data":[...], "meta": {...}}
     """
-    # base query scoped to the current user
+    
     q = (
         db.session.query(Task)
         .filter_by(user_id=current_user.id)
@@ -250,7 +250,7 @@ def delete_task(task_id: int):
     if not t or t.user_id != current_user.id:
         return {"error": "task not found"}, 404
 
-    # delete subtasks defensively (in case ORM cascade isn't configured)
+    # delete subtasks defensively
     subs = db.session.query(Subtask).filter_by(task_id=t.id).all()
     for s in subs:
         db.session.delete(s)

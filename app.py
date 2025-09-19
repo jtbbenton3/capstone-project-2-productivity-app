@@ -1,49 +1,81 @@
+# app.py
+from __future__ import annotations
+
+import os
+from datetime import datetime
 from flask import Flask
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_bcrypt import Bcrypt
 from flask_login import LoginManager
-from flask_cors import CORS
 
+# ---- extensions 
 db = SQLAlchemy()
 migrate = Migrate()
 bcrypt = Bcrypt()
 login_manager = LoginManager()
 
-def create_app():
+
+def create_app() -> Flask:
     app = Flask(__name__)
+
+    # ---- config 
+    
     app.config.from_object("config.Config")
 
-    # helpful cookie/CORS defaults for local dev
-    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
-    app.config.setdefault("SESSION_COOKIE_SECURE", False)
-
+    # ---- init extensions 
     db.init_app(app)
     migrate.init_app(app, db)
     bcrypt.init_app(app)
     login_manager.init_app(app)
 
-    # allow credentials for frontend later (localhost)
-    CORS(app, supports_credentials=True, resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"]}})
+    # ---- CORS  
+    CORS(
+        app,
+        origins=[
+            "http://127.0.0.1:3000",
+            "http://localhost:3000",
+        ],
+        supports_credentials=True,
+    )
 
-    # import models so Alembic knows about them
-    from models import User, Project, Task, Subtask  # noqa: F401
+    # ---- login manager 
+    from models import User
 
     @login_manager.user_loader
-    def load_user(user_id):
-        return db.session.get(User, int(user_id))
+    def load_user(user_id: str):
+        
+        try:
+            return db.session.get(User, int(user_id))
+        except Exception:
+            return None
 
-    # register blueprints
+    login_manager.login_view = None  
+
+    # ---- blueprints 
     from auth import auth_bp
-    app.register_blueprint(auth_bp)
+    from routes.projects import projects_bp
+    from routes.tasks import tasks_bp
+    from routes.subtasks import subtasks_bp
 
-    @app.route("/")
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(projects_bp)
+    app.register_blueprint(tasks_bp)
+    app.register_blueprint(subtasks_bp)
+
+    # ---- health check 
+    @app.get("/healthz")
+    def healthz():
+        return {"status": "ok", "time": datetime.utcnow().isoformat() + "Z"}, 200
+
+    # ---- optional root 
+    @app.get("/")
     def index():
-        return {"message": "Daily Student Productivity API is running"}
+        return {"service": "productivity-api", "ok": True}, 200
 
     return app
 
-app = create_app()
 
-if __name__ == "__main__":
-    app.run(debug=True)
+
+app = create_app()

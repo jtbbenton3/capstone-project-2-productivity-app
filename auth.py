@@ -15,7 +15,7 @@ def signup():
     if not username or not email or not password:
         return {"error": "username, email, and password are required"}, 400
 
-    # uniqueness checks
+    # checks
     if db.session.query(User).filter((User.username == username) | (User.email == email)).first():
         return {"error": "username or email already exists"}, 409
 

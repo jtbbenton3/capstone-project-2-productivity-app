@@ -39,8 +39,8 @@ def parse_sort(arg: Union[str, Request, None], default: str = "-created_at") -> 
 
     Returns a list of (field, direction) where direction is 'asc' or 'desc'.
     """
-    if hasattr(arg, "args"):  # Request-like
-        sort_param = (arg.args.get("sort") or "").strip()  # type: ignore[attr-defined]
+    if hasattr(arg, "args"):  
+        sort_param = (arg.args.get("sort") or "").strip()  
     else:
         sort_param = (arg or "").strip()
 
@@ -71,7 +71,7 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
     - default_field: a column to use if 'sorts' is empty (e.g., Task.created_at)
     - tie_breaker: a column appended at the end for stable ordering (e.g., Task.id)
     """
-    # Map allowed fields to actual columns
+    
     columns = {
         "id": Task.id,
         "title": Task.title,
@@ -85,7 +85,7 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
     orders = []
 
     if not sorts and default_field is not None:
-        # If you provide a default_field, assume DESC by convention for created_at-like fields.
+        
         orders.append(desc(default_field))
 
     for field, direction in sorts:
@@ -93,7 +93,7 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
         if not col:
             continue
 
-        if field in ("due_date",):  # ensure NULLS LAST when sorting by dates
+        if field in ("due_date",):  
             if direction == "desc":
                 orders.append(nullslast(desc(col)))
             else:
@@ -101,7 +101,7 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
         else:
             orders.append(desc(col) if direction == "desc" else asc(col))
 
-    # Stable tie-breaker at the end
+    
     if tie_breaker is not None:
         if all(getattr(o.element if hasattr(o, "element") else o, "key", None) != getattr(tie_breaker, "key", None)
                for o in orders):
@@ -112,17 +112,17 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
     return query
 
 
-# ---------- Pagination ----------
+# ---------- Pagination 
 def paginate_query(query, page: int, per_page: int) -> Tuple[List[Any], Dict[str, int]]:
     """Apply offset/limit and return items + meta block."""
-    total = query.order_by(None).count()  # drop ORDER BY for accurate COUNT
+    total = query.order_by(None).count()  
     pages = max(1, math.ceil(total / per_page)) if total else 1
     items = query.limit(per_page).offset((page - 1) * per_page).all()
     meta = {"page": page, "per_page": per_page, "total": total, "pages": pages}
     return items, meta
 
 
-# ---------- Simple serializers (used by routes) ----------
+# ---------- Simple serializers 
 def project_to_dict(p: Project) -> Dict[str, Any]:
     return {
         "id": p.id,

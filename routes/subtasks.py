@@ -4,11 +4,10 @@ from flask_login import login_required, current_user
 from app import db
 from models import Subtask, Task, STATUS_VALUES
 
-# accept both /subtasks and /subtasks/
-subtasks_bp = Blueprint("subtasks", __name__, url_prefix="/subtasks", strict_slashes=False)
 
+subtasks_bp = Blueprint("subtasks", __name__, url_prefix="/subtasks")
 
-# ---- helpers ---------------------------------------------------------------
+# ---- helpers -----
 
 def _subtask_to_dict(s: Subtask):
     return {
@@ -19,7 +18,6 @@ def _subtask_to_dict(s: Subtask):
         "created_at": s.created_at.isoformat() if getattr(s, "created_at", None) else None,
     }
 
-
 def _get_user_task(task_id: int) -> Task | None:
     """Fetch a task if it belongs to the current user, else None."""
     t = db.session.get(Task, task_id)
@@ -27,8 +25,7 @@ def _get_user_task(task_id: int) -> Task | None:
         return None
     return t
 
-
-# ---- routes ----------------------------------------------------------------
+# ---- routes ------
 
 @subtasks_bp.post("")
 @login_required
@@ -57,11 +54,11 @@ def create_subtask():
     if status not in STATUS_VALUES:
         return {"error": f"status must be one of {list(STATUS_VALUES)}"}, 400
 
-    s = Subtask(title=title, task_id=task.id, status=status)
+    # include user_id so NOT NULL constraint is satisfied
+    s = Subtask(title=title, task_id=task.id, status=status, user_id=current_user.id)
     db.session.add(s)
     db.session.commit()
     return _subtask_to_dict(s), 201
-
 
 @subtasks_bp.patch("/<int:subtask_id>")
 @login_required
@@ -74,7 +71,7 @@ def update_subtask(subtask_id: int):
     if not s:
         return {"error": "subtask not found"}, 404
 
-    # Ensure the parent task belongs to the current user
+    # Ensures the parent task belongs to the current user
     parent = _get_user_task(s.task_id)
     if not parent:
         return {"error": "subtask not found"}, 404
@@ -113,7 +110,6 @@ def update_subtask(subtask_id: int):
     db.session.commit()
     return _subtask_to_dict(s), 200
 
-
 @subtasks_bp.get("")
 @login_required
 def list_subtasks():
@@ -138,7 +134,7 @@ def list_subtasks():
         except Exception:
             return {"error": "task_id must be an integer"}, 400
 
-        # ensure that task is owned by current user
+        # ensures that task is owned by current user
         if not _get_user_task(tid):
             return {"error": "task not found or not owned by user"}, 404
         q = q.filter(Subtask.task_id == tid)
@@ -153,7 +149,6 @@ def list_subtasks():
     subs = q.order_by(Subtask.id.asc()).all()
     return [_subtask_to_dict(s) for s in subs], 200
 
-
 @subtasks_bp.delete("/<int:subtask_id>")
 @login_required
 def delete_subtask(subtask_id: int):
@@ -164,7 +159,7 @@ def delete_subtask(subtask_id: int):
     if not s:
         return {"error": "subtask not found"}, 404
 
-    # ensure the parent task belongs to the current user
+    # ensures parent task belongs to the current user
     parent = _get_user_task(s.task_id)
     if not parent:
         return {"error": "subtask not found"}, 404

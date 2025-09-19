@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL=${1:-http://127.0.0.1:5005}   # override with 5001 if you’re running there
+BASE_URL=${1:-http://127.0.0.1:5005}   
 JAR="cookies.txt"
 TMP_EMAIL="smoke_user_$(date +%s)@example.com"
 TMP_PASS="pass1234"
@@ -35,4 +35,4 @@ echo "== Me (after login, should be authenticated again) =="
 curl -s -i -b "$JAR" "$BASE_URL/auth/me" | sed -n '1,10p'
 
 echo
-echo "✅ Auth smoke complete."
+echo "Auth smoke complete."
