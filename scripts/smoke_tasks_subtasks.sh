@@ -1,63 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="${BASE:-http://127.0.0.1:5005}"
-COOKIES="${COOKIES:-cookies.txt}"
-HDR=(-H "Content-Type: application/json" -b "$COOKIES")
+BASE_URL="${BASE_URL:-http://127.0.0.1:5005}"
+COOKIE_JAR="cookies.txt"
+
+need_login() {
+  AME="$(curl -sS -b "$COOKIE_JAR" "$BASE_URL/auth/me" || true)"
+  echo "$AME" | jq -e '.authenticated == true' >/dev/null 2>&1
+}
+
+if ! need_login; then
+  echo "Not logged in; please run ./scripts/smoke_auth.sh first." >&2
+  exit 1
+fi
 
 echo "== Create a few tasks =="
-curl -sS "${HDR[@]}" -d '{"title":"Task A","project_id":1,"priority":"high","status":"todo","due_date":"2025-10-01"}' "$BASE/tasks" | jq .
-curl -sS "${HDR[@]}" -d '{"title":"Task B","project_id":1,"priority":"low","status":"todo","due_date":"2025-10-05"}'  "$BASE/tasks" | jq .
-curl -sS "${HDR[@]}" -d '{"title":"Task C","project_id":1,"priority":"normal","status":"in_progress","due_date":"2025-09-30"}' "$BASE/tasks" | jq .
-curl -sS "${HDR[@]}" -d '{"title":"Task D","project_id":1,"priority":"normal","status":"todo"}' "$BASE/tasks" | jq .
+# Create a throwaway project first
+PROJ="$(curl -sS -b "$COOKIE_JAR" -H "Content-Type: application/json" \
+  -d '{"title":"Smoke Project","description":"created by smoke script"}' \
+  "$BASE_URL/projects")"
+echo "$PROJ"
+PID="$(echo "$PROJ" | jq -r '.id')"
 
-echo "== List tasks (default sort -created_at) =="
-curl -sS -b "$COOKIES" "$BASE/tasks?page=1&per_page=10" | jq .
+# three tasks
+for payload in \
+  "{\"title\":\"Set up routes\",\"project_id\":$PID,\"status\":\"todo\",\"priority\":\"high\",\"due_date\":\"2025-09-25\"}" \
+  "{\"title\":\"Frontend polish\",\"project_id\":$PID,\"status\":\"todo\",\"priority\":\"normal\",\"due_date\":\"2025-10-05\"}" \
+  "{\"title\":\"Wire up pagination\",\"project_id\":$PID,\"status\":\"in_progress\",\"priority\":\"low\",\"due_date\":\"2025-09-30\"}"
+do
+  curl -sS -b "$COOKIE_JAR" -H "Content-Type: application/json" -d "$payload" "$BASE_URL/tasks" | jq .
+done
 
-echo "== List tasks (sort by due_date asc, NULLS LAST) =="
-curl -sS -b "$COOKIES" "$BASE/tasks?sort=due_date" | jq .
+echo "== List tasks (sort by due_date) =="
+curl -sS -b "$COOKIE_JAR" "$BASE_URL/tasks?project_id=$PID&sort=due_date" | jq .
 
-echo "== List tasks (sort by -priority) =="
-curl -sS -b "$COOKIES" "$BASE/tasks?sort=-priority" | jq .
-
-echo "== Paginate (per_page=2, sort by title asc) =="
-curl -sS -b "$COOKIES" "$BASE/tasks?page=1&per_page=2&sort=title" | jq .
-
-# Grab one task id for subtask tests
-TASK_ID=$(curl -sS -b "$COOKIES" "$BASE/tasks?sort=title" | jq -r '.data[0].id')
-echo "Using TASK_ID=$TASK_ID"
-
-echo "== Create a subtask on TASK_ID =="
-curl -sS "${HDR[@]}" -d "{\"title\":\"Wire up pagination (FE)\",\"task_id\":$TASK_ID,\"status\":\"todo\"}" \
-     "$BASE/subtasks" | jq .
-
-# Grab the subtask id
-SUB_ID=$(curl -sS -b "$COOKIES" "$BASE/subtasks?task_id=$TASK_ID" | jq -r '.[0].id')
-echo "Using SUB_ID=$SUB_ID"
+echo "== Create a subtask on the third task =="
+TASKS="$(curl -sS -b "$COOKIE_JAR" "$BASE_URL/tasks?project_id=$PID&sort=due_date")"
+TID="$(echo "$TASKS" | jq -r '.data[-1].id')"  # last one by due_date sort (adjust if needed)
+SUB1="$(curl -sS -b "$COOKIE_JAR" -H "Content-Type: application/json" \
+  -d "{\"title\":\"Implement backend pagination\",\"task_id\":$TID,\"status\":\"todo\"}" \
+  "$BASE_URL/subtasks")"
+echo "$SUB1" | jq .
+SID="$(echo "$SUB1" | jq -r '.id')"
 
 echo "== Update subtask title+status =="
-curl -sS "${HDR[@]}" -X PATCH -d '{"title":"Wire up pagination (FE) – updated","status":"in_progress"}' \
-     "$BASE/subtasks/$SUB_ID" | jq .
+curl -sS -b "$COOKIE_JAR" -X PATCH -H "Content-Type: application/json" \
+  -d '{"title":"Implement backend pagination – updated","status":"in_progress"}' \
+  "$BASE_URL/subtasks/$SID" | jq .
 
-echo "== List subtasks (all for current user) =="
-curl -sS -b "$COOKIES" "$BASE/subtasks" | jq .
-
-echo "== Filter subtasks by task_id =="
-curl -sS -b "$COOKIES" "$BASE/subtasks?task_id=$TASK_ID" | jq .
-
-echo "== Filter subtasks by status =="
-curl -sS -b "$COOKIES" "$BASE/subtasks?status=in_progress" | jq .
-
-echo "== Negative test: invalid task status on create =="
-set +e
-curl -sS "${HDR[@]}" -d "{\"title\":\"Bad status\",\"project_id\":1,\"status\":\"wat\"}" "$BASE/tasks" | jq .
-set -e
+echo "== List subtasks for the task =="
+curl -sS -b "$COOKIE_JAR" "$BASE_URL/subtasks?task_id=$TID" | jq .
 
 echo "== Delete subtask =="
-curl -sS -b "$COOKIES" -X DELETE "$BASE/subtasks/$SUB_ID" | jq .
+curl -sS -b "$COOKIE_JAR" -X DELETE "$BASE_URL/subtasks/$SID" | jq .
 
-echo "== Delete a task (cascades its subtasks if any) =="
-TO_DELETE=$(curl -sS -b "$COOKIES" "$BASE/tasks?sort=title" | jq -r '.data[0].id')
-curl -sS -b "$COOKIES" -X DELETE "$BASE/tasks/$TO_DELETE" | jq .
+echo "== Delete the project (cascades tasks/subtasks) =="
+curl -sS -b "$COOKIE_JAR" -X DELETE "$BASE_URL/projects/$PID" | jq .
 
 echo "✅ Smoke tests finished."

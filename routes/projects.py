@@ -1,16 +1,14 @@
 # routes/projects.py
-from math import ceil
 from flask import Blueprint, request
 from flask_login import login_required, current_user
 from sqlalchemy import or_
+from math import ceil
 
 from app import db
 from models import Project, Task, Subtask
 
 projects_bp = Blueprint("projects", __name__, url_prefix="/projects")
 
-
-# ---- helpers -----
 
 def _project_to_dict(p: Project):
     return {
@@ -21,31 +19,23 @@ def _project_to_dict(p: Project):
     }
 
 
-# ---- routes ------
-
 @projects_bp.get("")
 @login_required
 def list_projects():
     """
     GET /projects
-    Optional query params:
-      - page (int, default 1)
-      - per_page (int, default 10)
-      - q (str, search in title/description)
-    Response:
-      { "data": [project...], "meta": { "page", "pages", "per_page", "total" } }
+    ?page=&per_page=&q=
     """
-    # pagination
     try:
         page = int(request.args.get("page", 1))
-    except (TypeError, ValueError):
+    except Exception:
         page = 1
     try:
         per_page = int(request.args.get("per_page", 10))
-    except (TypeError, ValueError):
+    except Exception:
         per_page = 10
-    page = max(page, 1)
-    per_page = max(min(per_page, 100), 1)
+    page = max(1, page)
+    per_page = max(1, min(100, per_page))
 
     q = (request.args.get("q") or "").strip()
 
@@ -55,7 +45,7 @@ def list_projects():
         like = f"%{q}%"
         qry = qry.filter(or_(Project.title.ilike(like), Project.description.ilike(like)))
 
-    # Sort newest first 
+    # Sort newest first if possible
     if hasattr(Project, "created_at"):
         qry = qry.order_by(Project.created_at.desc())
     else:
@@ -64,43 +54,17 @@ def list_projects():
     total = qry.count()
     items = qry.offset((page - 1) * per_page).limit(per_page).all()
     data = [_project_to_dict(p) for p in items]
-
     pages = max(1, ceil(total / per_page)) if per_page else 1
 
-    return {
-        "data": data,
-        "meta": {
-            "page": page,
-            "pages": pages,
-            "per_page": per_page,
-            "total": total,
-        },
-    }, 200
-
-
-@projects_bp.get("/<int:project_id>")
-@login_required
-def get_project(project_id: int):
-    """
-    GET /projects/<project_id>
-    Return a single project (owned by current user).
-    """
-    p = db.session.get(Project, project_id)
-    if not p or p.user_id != current_user.id:
-        return {"error": "project not found"}, 404
-    return _project_to_dict(p), 200
+    return {"data": data, "meta": {"page": page, "pages": pages, "per_page": per_page, "total": total}}, 200
 
 
 @projects_bp.post("")
 @login_required
 def create_project():
-    """
-    POST /projects
-    Body: { "title": str, "description": str? }
-    """
-    body = request.get_json(silent=True) or {}
-    title = (body.get("title") or "").strip()
-    description = (body.get("description") or "").strip()
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    description = (data.get("description") or "").strip()
 
     if not title:
         return {"error": "title is required"}, 400
@@ -114,10 +78,6 @@ def create_project():
 @projects_bp.patch("/<int:project_id>")
 @login_required
 def update_project(project_id: int):
-    """
-    PATCH /projects/<project_id>
-    Body can include: title, description
-    """
     p = db.session.get(Project, project_id)
     if not p or p.user_id != current_user.id:
         return {"error": "project not found"}, 404
@@ -140,15 +100,11 @@ def update_project(project_id: int):
 @projects_bp.delete("/<int:project_id>")
 @login_required
 def delete_project(project_id: int):
-    """
-    DELETE /projects/<project_id>
-    Deletes the project and all its tasks/subtasks.
-    """
     p = db.session.get(Project, project_id)
     if not p or p.user_id != current_user.id:
         return {"error": "project not found"}, 404
 
-    #tasks/subtasks
+    # Defensive cascade: delete tasks and their subtasks
     tasks = db.session.query(Task).filter_by(project_id=p.id).all()
     for t in tasks:
         subs = db.session.query(Subtask).filter_by(task_id=t.id).all()

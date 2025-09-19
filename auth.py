@@ -5,6 +5,7 @@ from models import User
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
+
 @auth_bp.post("/signup")
 def signup():
     data = request.get_json() or {}
@@ -15,8 +16,12 @@ def signup():
     if not username or not email or not password:
         return {"error": "username, email, and password are required"}, 400
 
-    # checks
-    if db.session.query(User).filter((User.username == username) | (User.email == email)).first():
+    exists = (
+        db.session.query(User)
+        .filter((User.username == username) | (User.email == email))
+        .first()
+    )
+    if exists:
         return {"error": "username or email already exists"}, 409
 
     user = User(username=username, email=email)
@@ -24,7 +29,7 @@ def signup():
     db.session.add(user)
     db.session.commit()
 
-    login_user(user)  # start the session
+    login_user(user)
     return {"id": user.id, "username": user.username, "email": user.email}, 201
 
 
@@ -58,5 +63,5 @@ def me():
         return {"authenticated": False, "user": None}, 200
     return {
         "authenticated": True,
-        "user": {"id": current_user.id, "username": current_user.username, "email": current_user.email}
+        "user": {"id": current_user.id, "username": current_user.username, "email": current_user.email},
     }, 200

@@ -1,59 +1,95 @@
-# app.py
 from __future__ import annotations
-
 import os
-from datetime import datetime
-from flask import Flask
+from datetime import timedelta
+
+from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
+from flask_login import LoginManager, current_user
 from flask_bcrypt import Bcrypt
-from flask_login import LoginManager
 
-# ---- extensions 
+from config import Config
+
+# --- Globals (extensions) ---
 db = SQLAlchemy()
 migrate = Migrate()
-bcrypt = Bcrypt()
 login_manager = LoginManager()
+bcrypt = Bcrypt()
 
 
-def create_app() -> Flask:
+def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
+    app.config.from_object(config_class)
 
-    # ---- config 
-    
-    app.config.from_object("config.Config")
+    # Cookies/sessions lifespan
+    app.config.setdefault("REMEMBER_COOKIE_DURATION", timedelta(days=14))
+    app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
+    # Helpful for local dev with curl & a React dev server
+    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
 
-    # ---- init extensions 
-    db.init_app(app)
-    migrate.init_app(app, db)
-    bcrypt.init_app(app)
-    login_manager.init_app(app)
-
-    # ---- CORS  
+    # CORS for localhost React dev server, with cookies
     CORS(
         app,
-        origins=[
-            "http://127.0.0.1:3000",
-            "http://localhost:3000",
-        ],
+        resources={r"/*": {"origins": ["http://127.0.0.1:3000", "http://localhost:3000"]}},
         supports_credentials=True,
     )
 
-    # ---- login manager 
-    from models import User
+    # Init extensions
+    db.init_app(app)
+    migrate.init_app(app, db)
+    login_manager.init_app(app)
+    bcrypt.init_app(app)
+
+    # Import models so SQLAlchemy is aware of them
+    from models import User, Project, Task, Subtask  # noqa: F401
 
     @login_manager.user_loader
     def load_user(user_id: str):
-        
-        try:
-            return db.session.get(User, int(user_id))
-        except Exception:
-            return None
+        return db.session.get(User, int(user_id))
 
-    login_manager.login_view = None  
+    # Avoid HTML redirects for APIs: return JSON 401 instead
+    @login_manager.unauthorized_handler
+    def _unauthorized():
+        return jsonify(error="unauthorized"), 401
 
-    # ---- blueprints 
+    login_manager.login_view = "auth.login"
+
+    # Health check (used by rubric/smoke)
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "user_authenticated": current_user.is_authenticated}, 200
+
+    # JSON error handlers (consistent error payloads)
+    @app.errorhandler(400)
+    def bad_request(e):
+        return jsonify(error="bad request"), 400
+
+    @app.errorhandler(401)
+    def unauthorized(e):
+        return jsonify(error="unauthorized"), 401
+
+    @app.errorhandler(403)
+    def forbidden(e):
+        return jsonify(error="forbidden"), 403
+
+    @app.errorhandler(404)
+    def not_found(e):
+        return jsonify(error="not found"), 404
+
+    @app.errorhandler(405)
+    def method_not_allowed(e):
+        return jsonify(error="method not allowed"), 405
+
+    @app.errorhandler(500)
+    def server_error(e):
+        return jsonify(error="server error"), 500
+
+    
+    with app.app_context():
+        db.create_all()
+
+    # Register blueprints
     from auth import auth_bp
     from routes.projects import projects_bp
     from routes.tasks import tasks_bp
@@ -63,16 +99,6 @@ def create_app() -> Flask:
     app.register_blueprint(projects_bp)
     app.register_blueprint(tasks_bp)
     app.register_blueprint(subtasks_bp)
-
-    # ---- health check 
-    @app.get("/healthz")
-    def healthz():
-        return {"status": "ok", "time": datetime.utcnow().isoformat() + "Z"}, 200
-
-    # ---- optional root 
-    @app.get("/")
-    def index():
-        return {"service": "productivity-api", "ok": True}, 200
 
     return app
 

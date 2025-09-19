@@ -5,7 +5,7 @@ from app import db, bcrypt
 # ----- Constants -----
 STATUS_VALUES = ("todo", "in_progress", "done")
 
-# ----- Models -----
+
 class User(UserMixin, db.Model):
     __tablename__ = "users"
 
@@ -19,7 +19,6 @@ class User(UserMixin, db.Model):
     tasks = db.relationship("Task", backref="owner", lazy=True, cascade="all, delete-orphan")
     subtasks = db.relationship("Subtask", backref="owner", lazy=True, cascade="all, delete-orphan")
 
-    # auth helpers
     def set_password(self, password: str):
         self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")
 
@@ -46,7 +45,7 @@ class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
     due_date = db.Column(db.Date, nullable=True)
-    priority = db.Column(db.String(20), default="normal")  # simple string for now
+    priority = db.Column(db.String(20), default="normal")
     status = db.Column(db.Enum(*STATUS_VALUES, name="status_enum"), nullable=False, default="todo")
     notes = db.Column(db.Text, default="")
     completed_at = db.Column(db.DateTime, nullable=True)

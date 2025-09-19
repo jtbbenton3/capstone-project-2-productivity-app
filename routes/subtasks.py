@@ -4,10 +4,8 @@ from flask_login import login_required, current_user
 from app import db
 from models import Subtask, Task, STATUS_VALUES
 
-
 subtasks_bp = Blueprint("subtasks", __name__, url_prefix="/subtasks")
 
-# ---- helpers -----
 
 def _subtask_to_dict(s: Subtask):
     return {
@@ -18,22 +16,17 @@ def _subtask_to_dict(s: Subtask):
         "created_at": s.created_at.isoformat() if getattr(s, "created_at", None) else None,
     }
 
+
 def _get_user_task(task_id: int) -> Task | None:
-    """Fetch a task if it belongs to the current user, else None."""
     t = db.session.get(Task, task_id)
     if not t or t.user_id != current_user.id:
         return None
     return t
 
-# ---- routes ------
 
 @subtasks_bp.post("")
 @login_required
 def create_subtask():
-    """
-    POST /subtasks
-    Body: {title, task_id, status?}
-    """
     data = request.get_json() or {}
     title = (data.get("title") or "").strip()
     task_id = data.get("task_id")
@@ -54,45 +47,37 @@ def create_subtask():
     if status not in STATUS_VALUES:
         return {"error": f"status must be one of {list(STATUS_VALUES)}"}, 400
 
-    # include user_id so NOT NULL constraint is satisfied
     s = Subtask(title=title, task_id=task.id, status=status, user_id=current_user.id)
     db.session.add(s)
     db.session.commit()
     return _subtask_to_dict(s), 201
 
+
 @subtasks_bp.patch("/<int:subtask_id>")
 @login_required
 def update_subtask(subtask_id: int):
-    """
-    PATCH /subtasks/<subtask_id>
-    Body can include: title, status, task_id (to reassign to another of the user's tasks)
-    """
     s = db.session.get(Subtask, subtask_id)
     if not s:
         return {"error": "subtask not found"}, 404
 
-    # Ensures the parent task belongs to the current user
     parent = _get_user_task(s.task_id)
     if not parent:
         return {"error": "subtask not found"}, 404
 
     data = request.get_json() or {}
 
-    # title
     if "title" in data:
         new_title = (data.get("title") or "").strip()
         if not new_title:
             return {"error": "title cannot be empty"}, 400
         s.title = new_title
 
-    # status
     if "status" in data:
         new_status = (data.get("status") or "").strip()
         if new_status not in STATUS_VALUES:
             return {"error": f"status must be one of {list(STATUS_VALUES)}"}, 400
         s.status = new_status
 
-    # task reassignment
     if "task_id" in data:
         new_tid = data.get("task_id")
         if not new_tid:
@@ -110,15 +95,15 @@ def update_subtask(subtask_id: int):
     db.session.commit()
     return _subtask_to_dict(s), 200
 
+
 @subtasks_bp.get("")
 @login_required
 def list_subtasks():
     """
     GET /subtasks
-    Optional query params:
-      - task_id: filter to a given parent task (must belong to current user)
-      - status: one of STATUS_VALUES
-    NOTE: This endpoint returns a simple list (no pagination/meta).
+    Optional:
+      - task_id
+      - status
     """
     q = (
         db.session.query(Subtask)
@@ -126,20 +111,16 @@ def list_subtasks():
         .filter(Task.user_id == current_user.id)
     )
 
-    # filter by parent task
     task_id_raw = request.args.get("task_id")
     if task_id_raw:
         try:
             tid = int(task_id_raw)
         except Exception:
             return {"error": "task_id must be an integer"}, 400
-
-        # ensures that task is owned by current user
         if not _get_user_task(tid):
             return {"error": "task not found or not owned by user"}, 404
         q = q.filter(Subtask.task_id == tid)
 
-    # filter by status
     status = request.args.get("status")
     if status:
         if status not in STATUS_VALUES:
@@ -149,17 +130,14 @@ def list_subtasks():
     subs = q.order_by(Subtask.id.asc()).all()
     return [_subtask_to_dict(s) for s in subs], 200
 
+
 @subtasks_bp.delete("/<int:subtask_id>")
 @login_required
 def delete_subtask(subtask_id: int):
-    """
-    DELETE /subtasks/<subtask_id>
-    """
     s = db.session.get(Subtask, subtask_id)
     if not s:
         return {"error": "subtask not found"}, 404
 
-    # ensures parent task belongs to the current user
     parent = _get_user_task(s.task_id)
     if not parent:
         return {"error": "subtask not found"}, 404

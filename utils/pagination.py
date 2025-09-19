@@ -13,7 +13,6 @@ MAX_PER_PAGE = 100
 
 
 def parse_pagination_args(request: Request) -> Tuple[int, int]:
-    """Parse ?page=&per_page= query params with sane defaults/limits."""
     try:
         page = int(request.args.get("page", DEFAULT_PAGE))
     except Exception:
@@ -29,18 +28,9 @@ def parse_pagination_args(request: Request) -> Tuple[int, int]:
     return page, per_page
 
 
-# ---------- Sorting helpers ----------
 def parse_sort(arg: Union[str, Request, None], default: str = "-created_at") -> List[Tuple[str, str]]:
-    """
-    Accept either:
-      - a Flask Request (reads ?sort=... from query string), or
-      - a raw sort string like "-due_date,priority", or
-      - None.
-
-    Returns a list of (field, direction) where direction is 'asc' or 'desc'.
-    """
-    if hasattr(arg, "args"):  
-        sort_param = (arg.args.get("sort") or "").strip()  
+    if hasattr(arg, "args"):
+        sort_param = (arg.args.get("sort") or "").strip()  # type: ignore[attr-defined]
     else:
         sort_param = (arg or "").strip()
 
@@ -62,16 +52,7 @@ def parse_sort(arg: Union[str, Request, None], default: str = "-created_at") -> 
     return out
 
 
-def apply_sorts(query, sorts: List[Tuple[str, str]],
-                default_field=None, tie_breaker=None):
-    """
-    Apply an ORDER BY to the SQLAlchemy query.
-
-    - sorts: list of (field, direction) from parse_sort
-    - default_field: a column to use if 'sorts' is empty (e.g., Task.created_at)
-    - tie_breaker: a column appended at the end for stable ordering (e.g., Task.id)
-    """
-    
+def apply_sorts(query, sorts: List[Tuple[str, str]], default_field=None, tie_breaker=None):
     columns = {
         "id": Task.id,
         "title": Task.title,
@@ -85,7 +66,6 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
     orders = []
 
     if not sorts and default_field is not None:
-        
         orders.append(desc(default_field))
 
     for field, direction in sorts:
@@ -93,7 +73,7 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
         if not col:
             continue
 
-        if field in ("due_date",):  
+        if field in ("due_date",):
             if direction == "desc":
                 orders.append(nullslast(desc(col)))
             else:
@@ -101,28 +81,22 @@ def apply_sorts(query, sorts: List[Tuple[str, str]],
         else:
             orders.append(desc(col) if direction == "desc" else asc(col))
 
-    
     if tie_breaker is not None:
-        if all(getattr(o.element if hasattr(o, "element") else o, "key", None) != getattr(tie_breaker, "key", None)
-               for o in orders):
-            orders.append(desc(tie_breaker))
+        orders.append(desc(tie_breaker))
 
     if orders:
         query = query.order_by(*orders)
     return query
 
 
-# ---------- Pagination 
 def paginate_query(query, page: int, per_page: int) -> Tuple[List[Any], Dict[str, int]]:
-    """Apply offset/limit and return items + meta block."""
-    total = query.order_by(None).count()  
+    total = query.order_by(None).count()
     pages = max(1, math.ceil(total / per_page)) if total else 1
     items = query.limit(per_page).offset((page - 1) * per_page).all()
     meta = {"page": page, "per_page": per_page, "total": total, "pages": pages}
     return items, meta
 
 
-# ---------- Simple serializers 
 def project_to_dict(p: Project) -> Dict[str, Any]:
     return {
         "id": p.id,
