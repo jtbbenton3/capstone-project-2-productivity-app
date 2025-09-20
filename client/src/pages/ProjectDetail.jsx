@@ -1,199 +1,248 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
-import api from "../api";
+import { Link, useParams } from "react-router-dom";
+import { tasks, subtasks } from "../api";
+import { useAuth } from "../auth";
 
-// shows tasks for one project and lets you manage subtasks
+// simple helpers for display + cycling through states
+const STATUSES = ["todo", "in_progress", "done"];
+const PRIORITIES = ["low", "normal", "high"];
+
 export default function ProjectDetail() {
-  const { id } = useParams(); // project id
-  const projectId = useMemo(() => Number(id), [id]);
+  const { id } = useParams(); 
+  const projectId = Number(id);
+  const { user, refreshMe, logout } = useAuth();
 
-  const [tasks, setTasks] = useState([]);
-  const [meta, setMeta] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  // new task form
+  // create task form
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
-  const [priority, setPriority] = useState("normal");
+  const [priority, setPriority] = useState("high");
   const [status, setStatus] = useState("todo");
+
+  // list controls
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [perPage, setPerPage] = useState(10);
+  const [page, setPage] = useState(1);
+
+  // data + ui state
+  const [rows, setRows] = useState([]);
+  const [meta, setMeta] = useState({ page: 1, pages: 1, total: 0, per_page: 10 });
+  const [subs, setSubs] = useState({}); // taskId -> subtask list
   const [error, setError] = useState("");
 
-  async function loadTasks() {
-    const res = await api.listTasks({ project_id: projectId, sort: "due_date" });
-    // backend returns {data:[...], meta:{...}}
-    setTasks(res.data || []);
-    setMeta(res.meta || null);
-  }
-
-  useEffect(() => {
-    (async () => {
-      try {
-        await loadTasks();
-      } catch (e) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [projectId]);
-
-  async function onCreateTask(e) {
-    e.preventDefault();
+  // load tasks list
+  async function load() {
     setError("");
     try {
-      const created = await api.createTask({
-        project_id: projectId,
-        title,
-        due_date: due || null,
-        priority,
-        status,
+      const resp = await tasks.list({
+        projectId,
+        page,
+        perPage,
+        status: filterStatus,
+        sort: "due_date",
       });
-      setTasks((cur) => [created, ...cur]);
-      setTitle("");
-      setDue("");
-      setPriority("normal");
-      setStatus("todo");
+      setRows(resp.data);
+      setMeta(resp.meta);
+      // pre-load subtasks for those on screen
+      const all = {};
+      for (const t of resp.data) {
+        all[t.id] = await subtasks.list(t.id);
+      }
+      setSubs(all);
     } catch (e) {
       setError(e.message);
     }
   }
 
+  useEffect(() => {
+    (async () => {
+      try {
+        await refreshMe();
+        await load();
+      } catch (e) {
+        setError(e.message);
+      }
+    })();
+    
+  }, [projectId, page, perPage, filterStatus]);
+
+  async function onCreateTask(e) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    setError("");
+    try {
+      await tasks.create({
+        projectId,
+        title: title.trim(),
+        dueDate: due || null,
+        priority,
+        status,
+      });
+      setTitle("");
+      setDue("");
+      await load();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function nextStatus(task) {
+    const idx = STATUSES.indexOf(task.status);
+    const next = STATUSES[(idx + 1) % STATUSES.length];
+    await tasks.update(task.id, { status: next });
+    await load();
+  }
+
+  async function updatePriority(task, value) {
+    await tasks.update(task.id, { priority: value });
+    await load();
+  }
+
+  async function deleteTask(task) {
+    await tasks.remove(task.id);
+    await load();
+  }
+
+  async function addSubtask(taskId, title) {
+    if (!title.trim()) return;
+    await subtasks.create({ taskId, title: title.trim() });
+    const list = await subtasks.list(taskId);
+    setSubs((m) => ({ ...m, [taskId]: list }));
+  }
+
+  async function toggleSubtask(st) {
+    const next = st.status === "done" ? "todo" : "done";
+    await subtasks.update(st.id, { status: next });
+    const list = await subtasks.list(st.task_id);
+    setSubs((m) => ({ ...m, [st.task_id]: list }));
+  }
+
+  async function deleteSubtask(st) {
+    await subtasks.remove(st.id);
+    const list = await subtasks.list(st.task_id);
+    setSubs((m) => ({ ...m, [st.task_id]: list }));
+  }
+
+  const canPrev = useMemo(() => meta.page > 1, [meta.page]);
+  const canNext = useMemo(() => meta.page < meta.pages, [meta.page, meta.pages]);
+
   return (
-    <main className="page">
+    <main className="container">
+      <header className="topbar">
+        <nav className="nav">
+          <Link to="/">Home</Link>
+          <Link to="/projects">Projects</Link>
+        </nav>
+        <div className="authbox">
+          <span>Signed in as <strong>{user?.username}</strong></span>
+          <button onClick={logout} className="btn">Logout</button>
+        </div>
+      </header>
+
       <h1>Project #{projectId}</h1>
 
-      <section>
+      <section className="card">
         <h2>Create a task</h2>
-        <form className="form grid" onSubmit={onCreateTask}>
+        <form onSubmit={onCreateTask} className="row wrap">
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="title" />
-          <input value={due} onChange={(e) => setDue(e.target.value)} type="date" />
+          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
           <select value={priority} onChange={(e) => setPriority(e.target.value)}>
-            <option value="low">low</option>
-            <option value="normal">normal</option>
-            <option value="high">high</option>
+            {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="todo">todo</option>
-            <option value="in_progress">in_progress</option>
-            <option value="done">done</option>
+            {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          <button className="btn" type="submit">Create task</button>
+          <button type="submit" className="btn">Create task</button>
         </form>
-        {error && <div className="error">{error}</div>}
       </section>
 
-      <section style={{ marginTop: 24 }}>
-        <h2>Tasks</h2>
-        {loading ? (
-          <div>Loading…</div>
-        ) : tasks.length === 0 ? (
-          <div>No tasks yet.</div>
-        ) : (
-          <div className="cards">
-            {tasks.map((t) => (
-              <TaskCard key={t.id} task={t} />
-            ))}
-          </div>
-        )}
-        {meta && (
-          <div className="muted" style={{ marginTop: 8 }}>
-            page {meta.page} of {meta.pages} • total {meta.total}
-          </div>
-        )}
+      <section className="row" style={{ alignItems: "center", gap: 16, marginTop: 16 }}>
+        <label>status</label>
+        <select value={filterStatus} onChange={(e) => { setPage(1); setFilterStatus(e.target.value); }}>
+          {["all", ...STATUSES].map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+
+        <label>per page</label>
+        <select value={perPage} onChange={(e) => { setPage(1); setPerPage(Number(e.target.value)); }}>
+          {[5, 10, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
       </section>
+
+      <h2 style={{ marginTop: 12 }}>Tasks</h2>
+      {error && <div className="error">{error}</div>}
+
+      {rows.map((t) => (
+        <article key={t.id} className="task">
+          <header className="task-head">
+            <strong>{t.title}</strong>
+            <span className="muted">due {t.due_date || "—"}</span>
+          </header>
+
+          <div className="row wrap" style={{ gap: 8, margin: "8px 0" }}>
+            <div>
+              <label className="muted">status</label>
+              <div className="row">
+                <select value={t.status} onChange={(e) => tasks.update(t.id, { status: e.target.value }).then(load)}>
+                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <button className="btn" onClick={() => nextStatus(t)}>Next status</button>
+              </div>
+            </div>
+
+            <div>
+              <label className="muted">priority</label>
+              <select value={t.priority} onChange={(e) => updatePriority(t, e.target.value)}>
+                {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+
+            <button className="btn danger" onClick={() => deleteTask(t)}>Delete task</button>
+          </div>
+
+          <SubtasksBox
+            list={subs[t.id] || []}
+            onAdd={(title) => addSubtask(t.id, title)}
+            onToggle={toggleSubtask}
+            onDelete={deleteSubtask}
+          />
+        </article>
+      ))}
+
+      {/* Pagination footer */}
+      <footer className="row" style={{ gap: 12, marginTop: 12 }}>
+        <span className="muted">page {meta.page} of {meta.pages} • total {meta.total}</span>
+        <button className="btn" disabled={!canPrev} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
+        <button className="btn" disabled={!canNext} onClick={() => setPage((p) => p + 1)}>Next</button>
+      </footer>
     </main>
   );
 }
 
-// small component for a single task + subtasks
-function TaskCard({ task }) {
-  const [subtasks, setSubtasks] = useState([]);
-  const [loading, setLoading] = useState(true);
+function SubtasksBox({ list, onAdd, onToggle, onDelete }) {
   const [title, setTitle] = useState("");
-  const [err, setErr] = useState("");
-
-  async function load() {
-    const arr = await api.listSubtasks({ task_id: task.id });
-    setSubtasks(Array.isArray(arr) ? arr : arr?.data || []);
-  }
-
-  useEffect(() => {
-    (async () => {
-      try {
-        await load();
-      } catch (e) {
-        setErr(e.message);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [task.id]);
-
-  async function onAdd(e) {
-    e.preventDefault();
-    setErr("");
-    try {
-      const created = await api.createSubtask({ task_id: task.id, title });
-      setSubtasks((cur) => [...cur, created]);
-      setTitle("");
-    } catch (e) {
-      setErr(e.message);
-    }
-  }
-
-  async function onToggleStatus(st) {
-    // simple toggle: todo -> in_progress -> done -> todo
-    const next =
-      st.status === "todo" ? "in_progress" : st.status === "in_progress" ? "done" : "todo";
-    const updated = await api.updateSubtask(st.id, { status: next });
-    setSubtasks((cur) => cur.map((x) => (x.id === st.id ? updated : x)));
-  }
-
-  async function onDelete(st) {
-    await api.deleteSubtask(st.id);
-    setSubtasks((cur) => cur.filter((x) => x.id !== st.id));
-  }
-
   return (
-    <article className="card">
-      <header className="card-head">
-        <div><b>{task.title}</b></div>
-        <div className="muted">
-          due {task.due_date || "—"} • {task.priority} • {task.status}
-        </div>
-      </header>
-
-      <div style={{ marginTop: 8 }}>
-        <form onSubmit={onAdd} className="form">
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="new subtask" />
-          <button className="btn" type="submit">Add</button>
-        </form>
-        {err && <div className="error">{err}</div>}
+    <div className="card" style={{ marginTop: 8 }}>
+      <div className="row" style={{ gap: 8 }}>
+        <input
+          placeholder="new subtask"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (onAdd(title), setTitle(""))}
+        />
+        <button className="btn" onClick={() => (onAdd(title), setTitle(""))}>Add</button>
       </div>
 
-      <ul className="list" style={{ marginTop: 12 }}>
-        {loading ? (
-          <li>Loading subtasks…</li>
-        ) : subtasks.length === 0 ? (
-          <li className="muted">No subtasks.</li>
-        ) : (
-          subtasks.map((st) => (
-            <li key={st.id} className="item">
-              <span>
-                [{st.status}] {st.title}
-              </span>
-              <span>
-                <button className="btn small" onClick={() => onToggleStatus(st)}>
-                  Next status
-                </button>
-                <button className="btn small danger" onClick={() => onDelete(st)}>
-                  Delete
-                </button>
-              </span>
-            </li>
-          ))
-        )}
+      <ul className="list" style={{ marginTop: 8 }}>
+        {list.map((s) => (
+          <li key={s.id} className="list-item row" style={{ justifyContent: "space-between" }}>
+            <span>[{s.status}] {s.title}</span>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn" onClick={() => onToggle(s)}>Toggle</button>
+              <button className="btn danger" onClick={() => onDelete(s)}>Delete</button>
+            </div>
+          </li>
+        ))}
+        {list.length === 0 && <li className="muted">No subtasks.</li>}
       </ul>
-    </article>
+    </div>
   );
 }

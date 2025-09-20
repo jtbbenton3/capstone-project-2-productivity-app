@@ -11,7 +11,7 @@ from flask_bcrypt import Bcrypt
 
 from config import Config
 
-# --- Globals (extensions) ---
+# --- Globals ---
 db = SQLAlchemy()
 migrate = Migrate()
 login_manager = LoginManager()
@@ -25,13 +25,22 @@ def create_app(config_class: type = Config) -> Flask:
     # Cookies/sessions lifespan
     app.config.setdefault("REMEMBER_COOKIE_DURATION", timedelta(days=14))
     app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
-    # Helpful for local dev with curl & a React dev server
+    # Helpful for local dev with curl & a React/Vite dev server
     app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
 
-    # CORS for localhost React dev server, with cookies
+    # CORS for localhost React/Vite dev server, with cookies
     CORS(
         app,
-        resources={r"/*": {"origins": ["http://127.0.0.1:3000", "http://localhost:3000"]}},
+        resources={
+            r"/*": {
+                "origins": [
+                    "http://127.0.0.1:3000",
+                    "http://localhost:3000",
+                    "http://127.0.0.1:5173",   # Vite (127.0.0.1)
+                    "http://localhost:5173",   # Vite (localhost)
+                ]
+            }
+        },
         supports_credentials=True,
     )
 
@@ -41,14 +50,14 @@ def create_app(config_class: type = Config) -> Flask:
     login_manager.init_app(app)
     bcrypt.init_app(app)
 
-    # Import models so SQLAlchemy is aware of them
+    
     from models import User, Project, Task, Subtask  # noqa: F401
 
     @login_manager.user_loader
     def load_user(user_id: str):
         return db.session.get(User, int(user_id))
 
-    # Avoid HTML redirects for APIs: return JSON 401 instead
+    
     @login_manager.unauthorized_handler
     def _unauthorized():
         return jsonify(error="unauthorized"), 401
@@ -85,7 +94,7 @@ def create_app(config_class: type = Config) -> Flask:
     def server_error(e):
         return jsonify(error="server error"), 500
 
-    
+    # Create tables if they don't exist 
     with app.app_context():
         db.create_all()
 
