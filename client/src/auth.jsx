@@ -1,43 +1,60 @@
-// client/src/auth.jsx
 import { createContext, useContext, useEffect, useState } from "react";
 import api from "./api";
 
-const AuthCtx = createContext(null);
+// simple auth context for user + helpers
+const AuthContext = createContext();
 
 export function AuthProvider({ children }) {
-  const [me, setMe] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);       // null means not logged in
+  const [loading, setLoading] = useState(true); // initial load
 
-  async function refresh() {
-    setLoading(true);
-    try {
-      const data = await api.me();
-      setMe(data?.user || null);
-    } catch {
-      setMe(null);
-    } finally {
-      setLoading(false);
-    }
+  async function refreshMe() {
+    const me = await api.me();
+    setUser(me.authenticated ? me.user : null);
   }
 
-  async function logout() {
-    try {
-      await api.logout();
-    } catch {}
-    await refresh();
-  }
-
+  // load current session once on mount
   useEffect(() => {
-    refresh();
+    (async () => {
+      try {
+        await refreshMe();
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
+  // wrappers are convenient for pages
+  async function signup({ username, email, password }) {
+    await api.signup({ username, email, password });
+    await refreshMe();
+  }
+  async function login(email, password) {
+    await api.login(email, password);
+    await refreshMe();
+  }
+  async function logout() {
+    await api.logout();
+    await refreshMe();
+  }
+
   return (
-    <AuthCtx.Provider value={{ me, loading, refresh, logout }}>
+    <AuthContext.Provider
+      value={{ user, loading, refreshMe, signup, login, logout }}
+    >
       {children}
-    </AuthCtx.Provider>
+    </AuthContext.Provider>
   );
 }
 
 export function useAuth() {
-  return useContext(AuthCtx);
+  return useContext(AuthContext);
+}
+
+// gate for routes that need auth
+export function RequireAuth({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <main style={{ padding: 24 }}>Loading…</main>;
+  if (!user) return <main style={{ padding: 24 }}>Please log in.</main>;
+  return children;
 }
