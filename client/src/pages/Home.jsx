@@ -3,13 +3,13 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../auth";
 
 export default function Home() {
-  const { me } = useAuth();
+  const { user } = useAuth();
   return (
     <main style={{ padding: 24 }}>
       <h2>Welcome</h2>
-      <p>{me ? `Hi, ${me.username}.` : "You are not signed in."}</p>
+      <p>{user ? `Hi, ${user.username}.` : "You are not signed in."}</p>
       <p>
-        {me ? (
+        {user ? (
           <Link to="/projects">Go to Projects</Link>
         ) : (
           <>

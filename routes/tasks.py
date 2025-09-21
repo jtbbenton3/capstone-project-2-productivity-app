@@ -1,215 +1,111 @@
 # routes/tasks.py
-from datetime import date
-from flask import Blueprint, request
+from flask import Blueprint, request, jsonify, abort
 from flask_login import login_required, current_user
-from app import db
-from models import Task, Project, Subtask, STATUS_VALUES
-from utils.pagination import (
-    parse_pagination_args,
-    paginate_query,
-    parse_sort,
-    apply_sorts,
-)
+from sqlalchemy import asc, desc
+from models import db, Task, Project
+from utils.pagination import paginate
 
-tasks_bp = Blueprint("tasks", __name__, url_prefix="/tasks")
+bp = Blueprint("tasks", __name__)
 
+VALID_STATUS = {"todo", "in_progress", "done"}
+VALID_PRIORITY = {"low", "normal", "high"}
+VALID_SORT = {"created_at", "due_date", "priority", "status", "title"}
 
-def _parse_iso_date_or_none(value):
-    if value in (None, "", "null"):
-        return None
-    y, m, d = [int(x) for x in str(value).split("-")]
-    return date(y, m, d)
+def user_owns_project(project_id: int) -> bool:
+    if not project_id:
+        return False
+    p = Project.query.get(project_id)
+    return bool(p and p.owner_id == current_user.id)
 
+def task_visible_to_user(task: Task) -> bool:
+    if not task:
+        return False
+    p = Project.query.get(task.project_id)
+    return bool(p and p.owner_id == current_user.id)
 
-def _task_to_dict(t: Task):
-    return {
-        "id": t.id,
-        "title": t.title,
-        "status": t.status,
-        "project_id": t.project_id,
-        "due_date": t.due_date.isoformat() if t.due_date else None,
-        "priority": t.priority,
-        "created_at": t.created_at.isoformat() if getattr(t, "created_at", None) else None,
-    }
-
-
-@tasks_bp.get("")
+@bp.get("")
 @login_required
 def list_tasks():
-    """
-    GET /tasks
-    Filters: status, project_id, due_before, q
-    Sorting: ?sort=due_date,-priority,created_at etc.
-    Pagination: ?page=&per_page=
-    """
-    q = (
-        db.session.query(Task)
-        .filter_by(user_id=current_user.id)
-        .order_by(Task.created_at.desc())
-    )
+    project_id = request.args.get("project_id", type=int)
+    if not project_id:
+        return jsonify(error="project_id is required"), 400
+    if not user_owns_project(project_id):
+        abort(404)
 
-    status = request.args.get("status")
-    if status:
-        if status not in STATUS_VALUES:
-            return {"error": f"status must be one of {list(STATUS_VALUES)}"}, 400
+    page = max(1, request.args.get("page", default=1, type=int))
+    per_page = min(50, max(1, request.args.get("per_page", default=10, type=int)))
+    status = (request.args.get("status") or "all").strip()
+    sort = (request.args.get("sort") or "due_date").strip()
+    if sort not in VALID_SORT:
+        sort = "due_date"
+
+    q = Task.query.filter_by(project_id=project_id)
+    if status != "all":
+        if status not in VALID_STATUS:
+            return jsonify(error="invalid status"), 400
         q = q.filter(Task.status == status)
 
-    project_id_raw = request.args.get("project_id")
-    if project_id_raw:
-        try:
-            pid = int(project_id_raw)
-        except ValueError:
-            return {"error": "project_id must be an integer"}, 400
-        proj = db.session.get(Project, pid)
-        if not proj or proj.user_id != current_user.id:
-            return {"error": "project not found or not owned by user"}, 404
-        q = q.filter(Task.project_id == pid)
+    sort_col = getattr(Task, sort)
+    # default ascending for due_date; created_at newest first is also fine — keep asc for consistency
+    q = q.order_by(asc(sort_col))
+    return jsonify(paginate(q, page=page, per_page=per_page, serializer=lambda t: t.to_dict())), 200
 
-    due_before_raw = request.args.get("due_before")
-    if due_before_raw:
-        try:
-            due_cutoff = _parse_iso_date_or_none(due_before_raw)
-            if not due_cutoff:
-                return {"error": "due_before must be YYYY-MM-DD"}, 400
-        except Exception:
-            return {"error": "due_before must be YYYY-MM-DD"}, 400
-        q = q.filter(Task.due_date.isnot(None), Task.due_date <= due_cutoff)
-
-    query_text = request.args.get("q")
-    if query_text:
-        like = f"%{query_text.strip()}%"
-        q = q.filter(Task.title.ilike(like))
-
-    sorts = parse_sort(request, default="-created_at")
-    q = apply_sorts(q, sorts, default_field=Task.created_at, tie_breaker=Task.id)
-
-    page, per_page = parse_pagination_args(request)
-    items, meta = paginate_query(q, page, per_page)
-
-    return {"data": [_task_to_dict(t) for t in items], "meta": meta}, 200
-
-
-@tasks_bp.get("/<int:task_id>")
-@login_required
-def get_task(task_id: int):
-    t = db.session.get(Task, task_id)
-    if not t or t.user_id != current_user.id:
-        return {"error": "task not found"}, 404
-
-    subs = (
-        db.session.query(Subtask)
-        .filter_by(task_id=t.id)
-        .order_by(Subtask.id.asc())
-        .all()
-    )
-
-    task_dict = _task_to_dict(t)
-    task_dict["subtasks"] = [
-        {
-            "id": s.id,
-            "title": s.title,
-            "status": s.status,
-            "task_id": s.task_id,
-            "created_at": s.created_at.isoformat() if getattr(s, "created_at", None) else None,
-        }
-        for s in subs
-    ]
-    return task_dict, 200
-
-
-@tasks_bp.post("")
+@bp.post("")
 @login_required
 def create_task():
-    data = request.get_json() or {}
-    title = (data.get("title") or "").strip()
+    data = request.get_json(silent=True) or {}
     project_id = data.get("project_id")
-    status = (data.get("status") or "todo").strip()
+    title = (data.get("title") or "").strip()
+    due_date = (data.get("due_date") or None)
     priority = (data.get("priority") or "normal").strip()
-    due_date_raw = data.get("due_date")
+    status = (data.get("status") or "todo").strip()
 
-    if not title or not project_id:
-        return {"error": "title and project_id are required"}, 400
+    if not project_id or not title:
+        return jsonify(error="project_id and title are required"), 400
+    if not user_owns_project(project_id):
+        abort(404)
+    if priority not in VALID_PRIORITY:
+        return jsonify(error="invalid priority"), 400
+    if status not in VALID_STATUS:
+        return jsonify(error="invalid status"), 400
 
-    project = db.session.get(Project, int(project_id))
-    if not project or project.user_id != current_user.id:
-        return {"error": "project not found or not owned by user"}, 404
-
-    if status not in STATUS_VALUES:
-        return {"error": f"status must be one of {list(STATUS_VALUES)}"}, 400
-
-    try:
-        parsed_due = _parse_iso_date_or_none(due_date_raw)
-    except Exception:
-        return {"error": "due_date must be YYYY-MM-DD"}, 400
-
-    t = Task(
-        title=title,
-        project_id=project.id,
-        user_id=current_user.id,
-        status=status,
-        priority=priority,
-        due_date=parsed_due,
-    )
+    t = Task(project_id=project_id, title=title, priority=priority, status=status)
+    if due_date:
+        t.due_date = due_date  # ISO yyyy-mm-dd string works with SQLite adapter
     db.session.add(t)
     db.session.commit()
+    return jsonify(t.to_dict()), 201
 
-    return _task_to_dict(t), 201
-
-
-@tasks_bp.patch("/<int:task_id>")
+@bp.patch("/<int:task_id>")
 @login_required
 def update_task(task_id: int):
-    t = db.session.get(Task, task_id)
-    if not t or t.user_id != current_user.id:
-        return {"error": "task not found"}, 404
+    t = Task.query.get(task_id)
+    if not task_visible_to_user(t):
+        abort(404)
 
-    data = request.get_json() or {}
-
+    data = request.get_json(silent=True) or {}
     if "title" in data:
-        new_title = (data.get("title") or "").strip()
-        if not new_title:
-            return {"error": "title cannot be empty"}, 400
-        t.title = new_title
-
-    if "status" in data:
-        new_status = (data.get("status") or "").strip()
-        if new_status not in STATUS_VALUES:
-            return {"error": f"status must be one of {list(STATUS_VALUES)}"}, 400
-        t.status = new_status
-
-    if "priority" in data:
-        t.priority = (data.get("priority") or "").strip()
-
+        t.title = (data.get("title") or "").strip() or t.title
     if "due_date" in data:
-        try:
-            t.due_date = _parse_iso_date_or_none(data.get("due_date"))
-        except Exception:
-            return {"error": "due_date must be YYYY-MM-DD or null"}, 400
-
-    if "project_id" in data:
-        pid = data.get("project_id")
-        if not pid:
-            return {"error": "project_id cannot be empty"}, 400
-        new_proj = db.session.get(Project, int(pid))
-        if not new_proj or new_proj.user_id != current_user.id:
-            return {"error": "project not found or not owned by user"}, 404
-        t.project_id = new_proj.id
+        t.due_date = data.get("due_date") or None
+    if "priority" in data:
+        val = (data.get("priority") or "").strip()
+        if val and val in VALID_PRIORITY:
+            t.priority = val
+    if "status" in data:
+        val = (data.get("status") or "").strip()
+        if val and val in VALID_STATUS:
+            t.status = val
 
     db.session.commit()
-    return _task_to_dict(t), 200
+    return jsonify(t.to_dict()), 200
 
-
-@tasks_bp.delete("/<int:task_id>")
+@bp.delete("/<int:task_id>")
 @login_required
 def delete_task(task_id: int):
-    t = db.session.get(Task, task_id)
-    if not t or t.user_id != current_user.id:
-        return {"error": "task not found"}, 404
-
-    subs = db.session.query(Subtask).filter_by(task_id=t.id).all()
-    for s in subs:
-        db.session.delete(s)
-
+    t = Task.query.get(task_id)
+    if not task_visible_to_user(t):
+        abort(404)
     db.session.delete(t)
     db.session.commit()
-    return {"deleted": True, "id": task_id}, 200
+    return ("", 204)

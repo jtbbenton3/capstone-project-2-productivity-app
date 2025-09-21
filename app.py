@@ -1,116 +1,58 @@
-from __future__ import annotations
+# app.py
 import os
-from datetime import timedelta
-
 from flask import Flask, jsonify
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from flask_login import LoginManager, current_user
-from flask_bcrypt import Bcrypt
+from models import db, login_manager, bcrypt
+from auth import bp as auth_bp
+from routes.projects import bp as projects_bp
+from routes.tasks import bp as tasks_bp
+from routes.subtasks import bp as subtasks_bp
 
-from config import Config
-
-# --- Globals ---
-db = SQLAlchemy()
-migrate = Migrate()
-login_manager = LoginManager()
-bcrypt = Bcrypt()
-
-
-def create_app(config_class: type = Config) -> Flask:
+def create_app():
     app = Flask(__name__)
-    app.config.from_object(config_class)
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "devkey")
 
-    # Cookies/sessions lifespan
-    app.config.setdefault("REMEMBER_COOKIE_DURATION", timedelta(days=14))
-    app.config.setdefault("SESSION_COOKIE_HTTPONLY", True)
-    # Helpful for local dev with curl & a React/Vite dev server
-    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
-
-    # CORS for localhost React/Vite dev server, with cookies
-    CORS(
-        app,
-        resources={
-            r"/*": {
-                "origins": [
-                    "http://127.0.0.1:3000",
-                    "http://localhost:3000",
-                    "http://127.0.0.1:5173",   # Vite (127.0.0.1)
-                    "http://localhost:5173",   # Vite (localhost)
-                ]
-            }
-        },
-        supports_credentials=True,
+    db_url = os.getenv("DATABASE_URL")
+    app.config["SQLALCHEMY_DATABASE_URI"] = (db_url or "sqlite:///app.db").replace(
+        "postgres://", "postgresql://", 1
     )
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # Init extensions
+    # cookies/CORS for local dev + tests
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = False
+    origins = [f"http://127.0.0.1:{p}" for p in (5173, 5174, 5175, 5176, 5177)] + \
+              [f"http://localhost:{p}" for p in (5173, 5174, 5175, 5176, 5177)]
+    CORS(app, resources={r"/*": {"origins": origins}}, supports_credentials=True)
+
+    # init extensions
     db.init_app(app)
-    migrate.init_app(app, db)
-    login_manager.init_app(app)
     bcrypt.init_app(app)
+    login_manager.init_app(app)
 
-    
-    from models import User, Project, Task, Subtask  # noqa: F401
-
-    @login_manager.user_loader
-    def load_user(user_id: str):
-        return db.session.get(User, int(user_id))
-
-    
+    # return JSON 401 (no redirects/HTML)
     @login_manager.unauthorized_handler
-    def _unauthorized():
-        return jsonify(error="unauthorized"), 401
+    def _unauth():
+        return jsonify(error="Unauthorized"), 401
 
-    login_manager.login_view = "auth.login"
-
-    # Health check (used by rubric/smoke)
-    @app.get("/health")
-    def health():
-        return {"status": "ok", "user_authenticated": current_user.is_authenticated}, 200
-
-    # JSON error handlers (consistent error payloads)
-    @app.errorhandler(400)
-    def bad_request(e):
-        return jsonify(error="bad request"), 400
-
-    @app.errorhandler(401)
-    def unauthorized(e):
-        return jsonify(error="unauthorized"), 401
-
-    @app.errorhandler(403)
-    def forbidden(e):
-        return jsonify(error="forbidden"), 403
-
-    @app.errorhandler(404)
-    def not_found(e):
-        return jsonify(error="not found"), 404
-
-    @app.errorhandler(405)
-    def method_not_allowed(e):
-        return jsonify(error="method not allowed"), 405
-
-    @app.errorhandler(500)
-    def server_error(e):
-        return jsonify(error="server error"), 500
-
-    # Create tables if they don't exist 
+    # **critical**: ensure tables match models (sidestep busted Alembic state)
     with app.app_context():
         db.create_all()
 
-    # Register blueprints
-    from auth import auth_bp
-    from routes.projects import projects_bp
-    from routes.tasks import tasks_bp
-    from routes.subtasks import subtasks_bp
+    
+    Migrate(app, db)
 
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(projects_bp)
-    app.register_blueprint(tasks_bp)
-    app.register_blueprint(subtasks_bp)
+    # routes
+    app.register_blueprint(auth_bp, url_prefix="/auth")
+    app.register_blueprint(projects_bp, url_prefix="/projects")
+    app.register_blueprint(tasks_bp, url_prefix="/tasks")
+    app.register_blueprint(subtasks_bp, url_prefix="/subtasks")
+
+    @app.get("/health")
+    def health():
+        return jsonify(ok=True), 200
 
     return app
-
-
 
 app = create_app()

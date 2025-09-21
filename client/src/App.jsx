@@ -1,42 +1,28 @@
-import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
+// client/src/App.jsx
+import "./App.css";
+import { BrowserRouter, Routes, Route, Link, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth, RequireAuth } from "./auth";
+
 import Home from "./pages/Home";
-import Login from "./pages/Login";
-import Signup from "./pages/Signup";
 import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
-import "./App.css";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
 
-// header shows session + logout
 function Header() {
   const { user, logout } = useAuth();
-  const navigate = useNavigate();
-
-  async function onLogout() {
-    try {
-      await logout();
-      navigate("/login");
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
   return (
     <header className="topbar">
       <nav className="nav">
         <Link to="/">Home</Link>
         <Link to="/projects">Projects</Link>
-        <Link to="/login">Login</Link>
-        <Link to="/signup">Signup</Link>
-        <span className="spacer" />
-        <span>{user ? <>Signed in as <b>{user.username}</b></> : "Not signed in"}</span>
-        {user && (
-          <button className="btn" onClick={onLogout} style={{ marginLeft: 12 }}>
-            Logout
-          </button>
-        )}
+        {!user && <Link to="/login">Login</Link>}
+        {!user && <Link to="/signup">Signup</Link>}
       </nav>
-      <hr />
+      <div className="authbox">
+        {user ? <span>Signed in as <strong>{user.username}</strong></span> : <span>Not signed in</span>}
+        {user && <button onClick={logout} className="btn">Logout</button>}
+      </div>
     </header>
   );
 }
@@ -48,9 +34,6 @@ export default function App() {
         <Header />
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
-
           <Route
             path="/projects"
             element={
@@ -60,13 +43,16 @@ export default function App() {
             }
           />
           <Route
-            path="/projects/:id"
+            path="/projects/:projectId"
             element={
               <RequireAuth>
                 <ProjectDetail />
               </RequireAuth>
             }
           />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

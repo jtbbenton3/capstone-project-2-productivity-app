@@ -1,27 +1,21 @@
 // client/src/pages/Signup.jsx
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import api from "../api";
 import { useAuth } from "../auth";
 
 export default function Signup() {
   const [username, setUsername] = useState("");
-  const [email, setEmail]       = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError]       = useState("");
-  const { me, refresh }         = useAuth();
+  const [error, setError] = useState("");
+  const { user, signup } = useAuth();
   const navigate = useNavigate();
 
   async function onSubmit(e) {
     e.preventDefault();
     setError("");
     try {
-      await api.signup({
-        username: username.trim(),
-        email: email.trim(),
-        password,
-      });
-      await refresh();
+      await signup(username.trim(), email.trim(), password);
       navigate("/projects");
     } catch (err) {
       setError(err.message || "Signup failed");
@@ -32,7 +26,7 @@ export default function Signup() {
     <main style={{ padding: 24 }}>
       <h2>Sign up</h2>
       <div style={{ marginBottom: 12 }}>
-        {me ? `Signed in as ${me.username}` : "Not signed in"}
+        {user ? `Signed in as ${user.username}` : "Not signed in"}
       </div>
 
       <form onSubmit={onSubmit} style={{ display: "grid", gap: 8, maxWidth: 360 }}>

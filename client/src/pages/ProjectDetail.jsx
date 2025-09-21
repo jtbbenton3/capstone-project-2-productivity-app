@@ -1,40 +1,48 @@
+// client/src/pages/ProjectDetail.jsx
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { tasks, subtasks } from "../api";
+import { Link, useParams, useNavigate } from "react-router-dom";
+import { projects as projectsApi, tasks, subtasks } from "../api";
 import { useAuth } from "../auth";
 
-// simple helpers for display + cycling through states
 const STATUSES = ["todo", "in_progress", "done"];
 const PRIORITIES = ["low", "normal", "high"];
 
 export default function ProjectDetail() {
-  const { id } = useParams(); 
-  const projectId = Number(id);
-  const { user, refreshMe, logout } = useAuth();
+  const { projectId } = useParams();
+  const pid = Number(projectId);
+  const navigate = useNavigate();
+  const { user, refresh, logout } = useAuth();
 
-  // create task form
+  const [project, setProject] = useState(null);
+
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
-  const [priority, setPriority] = useState("high");
+  const [priority, setPriority] = useState("normal");
   const [status, setStatus] = useState("todo");
 
-  // list controls
   const [filterStatus, setFilterStatus] = useState("all");
   const [perPage, setPerPage] = useState(10);
   const [page, setPage] = useState(1);
 
-  // data + ui state
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState({ page: 1, pages: 1, total: 0, per_page: 10 });
-  const [subs, setSubs] = useState({}); // taskId -> subtask list
+  const [subs, setSubs] = useState({});
   const [error, setError] = useState("");
 
-  // load tasks list
-  async function load() {
+  async function loadProject() {
+    try {
+      const data = await projectsApi.get(pid);
+      setProject(data);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function loadTasks() {
     setError("");
     try {
       const resp = await tasks.list({
-        projectId,
+        projectId: pid,
         page,
         perPage,
         status: filterStatus,
@@ -42,7 +50,6 @@ export default function ProjectDetail() {
       });
       setRows(resp.data);
       setMeta(resp.meta);
-      // pre-load subtasks for those on screen
       const all = {};
       for (const t of resp.data) {
         all[t.id] = await subtasks.list(t.id);
@@ -56,14 +63,11 @@ export default function ProjectDetail() {
   useEffect(() => {
     (async () => {
       try {
-        await refreshMe();
-        await load();
-      } catch (e) {
-        setError(e.message);
-      }
+        await refresh();
+      } catch {}
+      await Promise.all([loadProject(), loadTasks()]);
     })();
-    
-  }, [projectId, page, perPage, filterStatus]);
+  }, [pid, page, perPage, filterStatus]);
 
   async function onCreateTask(e) {
     e.preventDefault();
@@ -71,7 +75,7 @@ export default function ProjectDetail() {
     setError("");
     try {
       await tasks.create({
-        projectId,
+        projectId: pid,
         title: title.trim(),
         dueDate: due || null,
         priority,
@@ -79,7 +83,7 @@ export default function ProjectDetail() {
       });
       setTitle("");
       setDue("");
-      await load();
+      await loadTasks();
     } catch (e) {
       setError(e.message);
     }
@@ -89,22 +93,22 @@ export default function ProjectDetail() {
     const idx = STATUSES.indexOf(task.status);
     const next = STATUSES[(idx + 1) % STATUSES.length];
     await tasks.update(task.id, { status: next });
-    await load();
+    await loadTasks();
   }
 
   async function updatePriority(task, value) {
     await tasks.update(task.id, { priority: value });
-    await load();
+    await loadTasks();
   }
 
   async function deleteTask(task) {
     await tasks.remove(task.id);
-    await load();
+    await loadTasks();
   }
 
-  async function addSubtask(taskId, title) {
-    if (!title.trim()) return;
-    await subtasks.create({ taskId, title: title.trim() });
+  async function addSubtask(taskId, stTitle) {
+    if (!stTitle.trim()) return;
+    await subtasks.create({ taskId, title: stTitle.trim() });
     const list = await subtasks.list(taskId);
     setSubs((m) => ({ ...m, [taskId]: list }));
   }
@@ -138,27 +142,25 @@ export default function ProjectDetail() {
         </div>
       </header>
 
-      <h1>Project #{projectId}</h1>
+      <h1>{project ? project.title : `Project #${pid}`}</h1>
+      <p className="muted">Manage tasks for this project. Create tasks below, then update status/priority and manage subtasks.</p>
 
       <section className="card">
-        <h2>Create a task</h2>
+        <h2>Create a task <span className="muted">defaults to “to do”</span></h2>
         <form onSubmit={onCreateTask} className="row wrap">
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="title" />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
           <input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
           <select value={priority} onChange={(e) => setPriority(e.target.value)}>
             {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <button type="submit" className="btn">Create task</button>
+          <button type="submit" className="btn">Add task</button>
         </form>
       </section>
 
       <section className="row" style={{ alignItems: "center", gap: 16, marginTop: 16 }}>
         <label>status</label>
         <select value={filterStatus} onChange={(e) => { setPage(1); setFilterStatus(e.target.value); }}>
-          {["all", ...STATUSES].map((s) => <option key={s} value={s}>{s}</option>)}
+          {["all", ...STATUSES].map((s) => <option key={s} value={s}>{s.replace("_"," ")}</option>)}
         </select>
 
         <label>per page</label>
@@ -181,8 +183,8 @@ export default function ProjectDetail() {
             <div>
               <label className="muted">status</label>
               <div className="row">
-                <select value={t.status} onChange={(e) => tasks.update(t.id, { status: e.target.value }).then(load)}>
-                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                <select value={t.status} onChange={(e) => tasks.update(t.id, { status: e.target.value }).then(loadTasks)}>
+                  {STATUSES.map((s) => <option key={s} value={s}>{s.replace("_"," ")}</option>)}
                 </select>
                 <button className="btn" onClick={() => nextStatus(t)}>Next status</button>
               </div>
@@ -200,19 +202,22 @@ export default function ProjectDetail() {
 
           <SubtasksBox
             list={subs[t.id] || []}
-            onAdd={(title) => addSubtask(t.id, title)}
+            onAdd={(stTitle) => addSubtask(t.id, stTitle)}
             onToggle={toggleSubtask}
             onDelete={deleteSubtask}
           />
         </article>
       ))}
 
-      {/* Pagination footer */}
       <footer className="row" style={{ gap: 12, marginTop: 12 }}>
         <span className="muted">page {meta.page} of {meta.pages} • total {meta.total}</span>
         <button className="btn" disabled={!canPrev} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
         <button className="btn" disabled={!canNext} onClick={() => setPage((p) => p + 1)}>Next</button>
       </footer>
+
+      <p style={{ marginTop: 16 }}>
+        <Link to="/projects">↤ Back to projects</Link>
+      </p>
     </main>
   );
 }
@@ -234,7 +239,7 @@ function SubtasksBox({ list, onAdd, onToggle, onDelete }) {
       <ul className="list" style={{ marginTop: 8 }}>
         {list.map((s) => (
           <li key={s.id} className="list-item row" style={{ justifyContent: "space-between" }}>
-            <span>[{s.status}] {s.title}</span>
+            <span>[{s.status.replace("_"," ")}] {s.title}</span>
             <div className="row" style={{ gap: 8 }}>
               <button className="btn" onClick={() => onToggle(s)}>Toggle</button>
               <button className="btn danger" onClick={() => onDelete(s)}>Delete</button>

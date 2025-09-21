@@ -1,60 +1,70 @@
+// client/src/auth.jsx
 import { createContext, useContext, useEffect, useState } from "react";
-import api from "./api";
+import * as api from "./api";
+import { Navigate } from "react-router-dom";
 
-// simple auth context for user + helpers
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);       // null means not logged in
-  const [loading, setLoading] = useState(true); // initial load
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  async function refreshMe() {
-    const me = await api.me();
-    setUser(me.authenticated ? me.user : null);
+  async function refresh() {
+    try {
+      setError("");
+      const res = await api.auth.me();
+      setUser(res.authenticated ? res.user : null);
+    } catch (e) {
+      setUser(null);
+      setError(e.message || "Failed to refresh session");
+    }
   }
 
-  // load current session once on mount
+  async function login(email, password) {
+    setError("");
+    await api.auth.login(email, password);
+    await refresh();
+  }
+
+  async function signup(username, email, password) {
+    setError("");
+    await api.auth.signup(username, email, password);
+    await refresh();
+  }
+
+  async function logout() {
+    setError("");
+    await api.auth.logout();
+    setUser(null);
+  }
+
   useEffect(() => {
     (async () => {
+      setLoading(true);
       try {
-        await refreshMe();
+        await refresh();
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  // wrappers are convenient for pages
-  async function signup({ username, email, password }) {
-    await api.signup({ username, email, password });
-    await refreshMe();
-  }
-  async function login(email, password) {
-    await api.login(email, password);
-    await refreshMe();
-  }
-  async function logout() {
-    await api.logout();
-    await refreshMe();
-  }
-
-  return (
-    <AuthContext.Provider
-      value={{ user, loading, refreshMe, signup, login, logout }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  const value = { user, loading, error, refresh, login, signup, logout };
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
-  return useContext(AuthContext);
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within <AuthProvider>");
+  return ctx;
 }
 
-// gate for routes that need auth
 export function RequireAuth({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <main style={{ padding: 24 }}>Loading…</main>;
-  if (!user) return <main style={{ padding: 24 }}>Please log in.</main>;
+  if (!user) return <Navigate to="/login" replace />;
   return children;
 }
+
+export const Protected = RequireAuth;
