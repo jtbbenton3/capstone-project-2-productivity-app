@@ -90,3 +90,27 @@ BASE_URL=http://127.0.0.1:5005 FRONTEND_URL=http://127.0.0.1:5173 ./scripts/run_
 # Option 2: Python runner
 python scripts/e2e_test.py --base http://127.0.0.1:5005 --frontend http://127.0.0.1:5173
 ```
+
+### 5. Running the App
+
+#### Start the Backend
+From the backend root (`Capstone-Project-2-server`):
+
+```bash
+source .venv/bin/activate
+flask run --port 5005
+```
+
+This will start the API server at:
+➡️ http://127.0.0.1:5005
+
+### Start the Frontend
+
+From the client folder:
+
+npm run dev -- --host 127.0.0.1 --port 5173
+
+This will start the React frontend at:
+➡️ http://127.0.0.1:5173
+
+You should now be able to sign up, create projects, tasks, and subtasks directly in the web app.
